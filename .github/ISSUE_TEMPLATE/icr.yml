@@ -14,7 +14,7 @@ body:
     id: requester
     attributes:
       label: Requesting team & contact
-      placeholder: "App team · Amaka Obi (amaka@example.com)"
+      placeholder: "App team · Mariam-Ayo Obi (m-ayo.obi@example.com)"
     validations:
       required: true
 
