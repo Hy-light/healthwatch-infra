@@ -67,9 +67,23 @@ add_fic () {   # name, subject
     echo "   added federated credential '$1'"
   fi
 }
-add_fic "gh-pull-request" "repo:${GITHUB_REPO}:pull_request"
-add_fic "gh-main"         "repo:${GITHUB_REPO}:ref:refs/heads/main"
-add_fic "gh-production"   "repo:${GITHUB_REPO}:environment:production"
+# GitHub sends one of two "subject" formats when it logs in to Azure:
+#   classic : repo:owner/repo:...
+#   newer   : repo:owner@<owner-id>/repo@<repo-id>:...   (newer repos/accounts)
+# We register BOTH, so it works whichever format your repo uses.
+GH_OWNER="${GITHUB_REPO%%/*}"
+GH_NAME="${GITHUB_REPO##*/}"
+REPO_JSON=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_NAME}" || true)
+OWNER_NUM=$(echo "$REPO_JSON" | jq -r '.owner.id // empty' 2>/dev/null || true)
+REPO_NUM=$(echo "$REPO_JSON" | jq -r '.id // empty' 2>/dev/null || true)
+
+for SUBJ_REPO in "${GITHUB_REPO}" ${OWNER_NUM:+"${GH_OWNER}@${OWNER_NUM}/${GH_NAME}@${REPO_NUM}"}; do
+  SUFFIX=""; [ "$SUBJ_REPO" != "$GITHUB_REPO" ] && SUFFIX="-ids"
+  add_fic "gh-pull-request${SUFFIX}" "repo:${SUBJ_REPO}:pull_request"
+  add_fic "gh-main${SUFFIX}"         "repo:${SUBJ_REPO}:ref:refs/heads/main"
+  add_fic "gh-production${SUFFIX}"   "repo:${SUBJ_REPO}:environment:production"
+done
+[ -z "$OWNER_NUM" ] && echo "   (could not read repo IDs from GitHub; is the repo public and the name right? Only classic format registered.)"
 
 echo ">> 3/3 Permissions"
 assign_role () {   # role, scope
