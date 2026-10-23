@@ -11,7 +11,7 @@ location    = "southafricanorth"
 
 states = ["Lagos"]
 
-owner_email        = "platform-team@example.com"
+owner_email        = "puc.chime@gmail.com"
 cost_centre        = "CC-HEALTH-001"
 monthly_budget_usd = 50
 
