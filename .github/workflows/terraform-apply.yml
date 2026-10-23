@@ -1,0 +1,125 @@
+# -----------------------------------------------------------------------------
+# Runs when an approved Pull Request is merged into main.
+#   Job 1 (plan)  : re-plans against the real environment and saves the plan.
+#   Job 2 (apply) : WAITS for a human approver (the "production" environment
+#                   gate = our Change Advisory Board), then applies exactly
+#                   the saved plan. Nothing more, nothing less.
+# Can also be started by hand (used to fix drift).
+# -----------------------------------------------------------------------------
+name: "ICR Implement: Apply to Azure"
+
+on:
+  push:
+    branches: [main]
+    paths: ["terraform/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: tf-production
+  cancel-in-progress: false
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  plan:
+    name: Final plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=healthwatch-prod.tfstate"
+
+      - name: Plan
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -lock-timeout=120s -out=tfplan | tee plan.txt
+          {
+            echo "## 📋 Change about to be applied"
+            echo ""
+            echo '```'
+            grep -E "^Plan:|^No changes" plan.txt || true
+            echo '```'
+            echo "<details><summary>Full plan</summary>"
+            echo ""
+            echo '```terraform'
+            cat plan.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          # The lock file travels with the plan so the apply job uses the exact same provider versions.
+          path: |
+            terraform/tfplan
+            terraform/.terraform.lock.hcl
+          include-hidden-files: true
+          retention-days: 5
+
+  apply:
+    name: Apply (needs CAB approval)
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production   # <- required reviewers configured in repo Settings > Environments
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform
+
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=healthwatch-prod.tfstate"
+
+      - name: Apply the approved plan
+        run: terraform apply -input=false -no-color -lock-timeout=120s tfplan
+
+      - name: Publish result
+        run: |
+          URL=$(terraform output -raw status_page_url)
+          REF=$(terraform output -raw change_ref)
+          {
+            echo "## ✅ ${REF} implemented"
+            echo ""
+            echo "**Status page:** ${URL}"
+            echo ""
+            echo "Next: verify, then close the ICR with a link to this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Status page: ${URL}"

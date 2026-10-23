@@ -1,0 +1,62 @@
+# -----------------------------------------------------------------------------
+# Tear the whole environment down (end of lesson / cost control).
+# Needs you to type DESTROY and a CAB approval. Remote state is kept.
+# -----------------------------------------------------------------------------
+name: "Decommission: Destroy Environment"
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type DESTROY to confirm"
+        required: true
+      icr_id:
+        description: "ICR authorising the decommission (e.g. ICR-0043)"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: tf-production
+  cancel-in-progress: false
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  destroy:
+    name: Destroy (needs CAB approval)
+    if: github.event.inputs.confirm == 'DESTROY'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=healthwatch-prod.tfstate"
+
+      - name: Destroy
+        env:
+          ICR_ID: ${{ github.event.inputs.icr_id }}
+        run: |
+          echo "Decommission authorised by $ICR_ID"
+          terraform destroy -input=false -no-color -auto-approve -lock-timeout=120s
+          echo "## 🧹 Environment destroyed under $ICR_ID" >> "$GITHUB_STEP_SUMMARY"

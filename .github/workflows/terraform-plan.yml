@@ -1,0 +1,172 @@
+# -----------------------------------------------------------------------------
+# Runs on every Pull Request that touches the infrastructure.
+# Nothing is changed in Azure here: this is the "review" stage of the ICR.
+#   1. Format & validate     -> is the code well-formed?
+#   2. Terraform plan        -> exactly what WILL change?
+#   3. Security policy gates -> is the change safe? (Checkov + our own rule)
+#   4. Post everything as a PR comment for the change reviewers
+# -----------------------------------------------------------------------------
+name: "ICR Review: Plan & Policy"
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["terraform/**"]
+
+permissions:
+  id-token: write       # OIDC login to Azure (no stored passwords)
+  contents: read
+  pull-requests: write  # to post the plan as a comment
+
+concurrency:
+  group: tf-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  plan:
+    name: Plan & Policy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: "1 · Format check"
+        id: fmt
+        run: terraform fmt -check -recursive -diff
+        continue-on-error: true
+
+      - name: Init (remote state in Azure)
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=healthwatch-prod.tfstate"
+
+      - name: "1 · Validate"
+        id: validate
+        run: terraform validate -no-color
+
+      - name: "2 · Plan"
+        id: plan
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -lock-timeout=120s -out=tfplan | tee plan.txt
+          terraform show -json tfplan > plan.json
+          grep -E "^Plan:|^No changes" plan.txt > plan-summary.txt || echo "See full plan" > plan-summary.txt
+
+      - name: "3a · Policy: no management ports open to the internet"
+        id: policy
+        continue-on-error: true
+        run: |
+          # Our own tiny policy-as-code rule, written in jq.
+          # Fails if any NSG rule opens SSH (22) or RDP (3389) to everyone.
+          jq -r '
+            [ .resource_changes[]
+              | select(.type == "azurerm_network_security_group")
+              | .change.after.security_rule[]?
+              | select(.direction == "Inbound" and .access == "Allow")
+              | select(.destination_port_range == "22" or .destination_port_range == "3389")
+              | select((.source_address_prefix // "") | ascii_downcase | IN("*", "0.0.0.0/0", "internet", "any"))
+              | "BLOCKED: rule \(.name) opens port \(.destination_port_range) to \(.source_address_prefix)"
+            ] | .[]' plan.json > policy.txt
+          if [ -s policy.txt ]; then
+            cat policy.txt
+            exit 1
+          fi
+          echo "PASSED: no management ports open to the internet" | tee policy.txt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "3b · Security scan (Checkov)"
+        id: checkov
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pip install --quiet "checkov>=3.2,<4"
+          # A focused set of checks so the signal is clear for reviewers.
+          checkov -f plan.json --framework terraform_plan --compact --quiet \
+            --check CKV_AZURE_9,CKV_AZURE_10,CKV_AZURE_44,CKV_AZURE_160 \
+            --output cli 2>&1 | tee checkov.txt
+          echo "Checkov: all selected checks passed" >> checkov.txt
+
+      - name: "4 · Post results on the Pull Request"
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@v7
+        env:
+          FMT: ${{ steps.fmt.outcome }}
+          VALIDATE: ${{ steps.validate.outcome }}
+          PLAN: ${{ steps.plan.outcome }}
+          POLICY: ${{ steps.policy.outcome }}
+          CHECKOV: ${{ steps.checkov.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const read = (f, max = 40000) => {
+              try { const t = fs.readFileSync('terraform/' + f, 'utf8'); return t.length > max ? t.slice(0, max) + '\n...truncated...' : t; }
+              catch { return '(not produced)'; }
+            };
+            const icon = (o) => o === 'success' ? '✅' : (o === 'skipped' ? '⏭️' : '❌');
+            const e = process.env;
+            const body = `## 🏥 ICR Review: Terraform Plan & Policy
+
+            | Gate | Result |
+            |---|---|
+            | 1 · Format | ${e.FMT === 'success' ? '✅' : '⚠️ style only (not blocking)'} |
+            | 1 · Validate | ${icon(e.VALIDATE)} |
+            | 2 · Plan | ${icon(e.PLAN)} \`${read('plan-summary.txt').trim()}\` |
+            | 3a · Policy: no open management ports | ${icon(e.POLICY)} |
+            | 3b · Checkov security scan | ${icon(e.CHECKOV)} |
+
+            **Policy result**
+            \`\`\`
+            ${read('policy.txt', 4000).trim()}
+            \`\`\`
+
+            <details><summary><b>Checkov output</b></summary>
+
+            \`\`\`
+            ${read('checkov.txt', 15000).trim()}
+            \`\`\`
+            </details>
+
+            <details><summary><b>Full Terraform plan</b> (what will change in Azure)</summary>
+
+            \`\`\`terraform
+            ${read('plan.txt')}
+            \`\`\`
+            </details>
+
+            _Reviewers: approve only if the plan matches the ICR. Run #${context.runNumber}_`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+      - name: Gate decision
+        if: ${{ !cancelled() }}
+        run: |
+          echo "validate=${{ steps.validate.outcome }} plan=${{ steps.plan.outcome }} policy=${{ steps.policy.outcome }} checkov=${{ steps.checkov.outcome }}"
+          if [ "${{ steps.validate.outcome }}" != "success" ] || [ "${{ steps.plan.outcome }}" != "success" ] \
+             || [ "${{ steps.policy.outcome }}" != "success" ] || [ "${{ steps.checkov.outcome }}" != "success" ]; then
+            echo "::error::One or more gates failed. This change cannot be merged."
+            exit 1
+          fi
+          echo "All gates passed. Ready for CAB approval."

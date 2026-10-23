@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HealthWatch Naija · Clinic Network Status</title>
+<style>
+  :root { --navy:#0E2A47; --cream:#EFE6DC; --red:#E0322B; --gold:#B8996B; --green:#1E9E5A; --ink:#1B1B1B; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:var(--cream); color:var(--ink); }
+  header { background:var(--navy); color:#fff; padding:28px 20px 24px; }
+  .wrap { max-width:720px; margin:0 auto; }
+  .eyebrow { font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--gold); font-weight:700; }
+  h1 { font-size:28px; margin:6px 0 4px; }
+  .sub { color:#c9d4e2; font-size:15px; }
+  .live { display:inline-flex; align-items:center; gap:8px; margin-top:14px; background:rgba(255,255,255,.1); padding:6px 12px; border-radius:999px; font-size:13px; }
+  .live i { width:10px; height:10px; border-radius:50%; background:#3ddc84; box-shadow:0 0 0 4px rgba(61,220,132,.25); }
+  main { padding:20px; }
+  .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:22px; }
+  .stat { background:#fff; border-radius:12px; padding:14px; }
+  .stat b { display:block; font-size:26px; color:var(--navy); }
+  .stat span { font-size:12px; color:#666; }
+  h2 { font-size:14px; letter-spacing:.12em; text-transform:uppercase; color:var(--red); margin:4px 0 10px; }
+  ul { list-style:none; display:grid; gap:10px; margin-bottom:24px; }
+  .card { display:flex; gap:12px; align-items:center; background:#fff; border-radius:12px; padding:14px 16px; }
+  .card strong { display:block; font-size:17px; color:var(--navy); }
+  .card small { color:#666; font-size:12px; }
+  .dot { width:12px; height:12px; border-radius:50%; background:var(--green); flex:none; }
+  .change { background:var(--navy); color:#fff; border-radius:12px; padding:16px; margin-bottom:24px; }
+  .change .k { color:var(--gold); font-size:12px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; }
+  .change .v { font-size:17px; margin-top:4px; }
+  table { width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; font-size:14px; }
+  td { padding:10px 14px; border-bottom:1px solid #eee; }
+  td:first-child { color:#666; width:42%; }
+  footer { text-align:center; font-size:12px; color:#777; padding:24px 20px 40px; }
+  @media (max-width:420px) { .stats { gap:8px; } .stat { padding:12px 10px; } .stat b { font-size:19px; } .stat span { font-size:11px; } h1 { font-size:24px; } }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="eyebrow">HealthWatch Naija · ${environment}</div>
+  <h1>Clinic Network Status</h1>
+  <div class="sub">Community health reporting infrastructure</div>
+  <div class="live"><i></i> All systems operational</div>
+</div></header>
+
+<main><div class="wrap">
+  <div class="stats">
+    <div class="stat"><b>${state_count}</b><span>States online</span></div>
+    <div class="stat"><b>${icr_id}</b><span>Last approved change</span></div>
+    <div class="stat"><b>SSH</b><span>${ssh_status}</span></div>
+  </div>
+
+  <div class="change">
+    <div class="k">Latest change · ${icr_id}</div>
+    <div class="v">${change_summary}</div>
+  </div>
+
+  <h2>States served</h2>
+  <ul>
+${state_cards}
+  </ul>
+
+  <h2>Environment</h2>
+  <table>
+    <tr><td>Environment</td><td>${environment}</td></tr>
+    <tr><td>Azure region</td><td>${location}</td></tr>
+    <tr><td>Owner</td><td>${owner}</td></tr>
+    <tr><td>Provisioned by</td><td>Terraform via GitHub Actions</td></tr>
+  </table>
+</div></main>
+
+<footer>Managed by Terraform. Manual changes will be detected and reverted.<br>Fictional company · built for a MIVA Open University live lesson</footer>
+</body>
+</html>

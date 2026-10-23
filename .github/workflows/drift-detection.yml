@@ -1,0 +1,88 @@
+# -----------------------------------------------------------------------------
+# Drift detection: does what is REALLY in Azure still match the code?
+# Runs every morning, and can be started by hand during the lesson.
+# If someone changed something in the portal ("ClickOps"), this opens an issue.
+# -----------------------------------------------------------------------------
+name: "Drift Detection"
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 07:00 Lagos time, daily
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  drift:
+    name: Compare Azure with code
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=healthwatch-prod.tfstate"
+
+      - name: Plan with detailed exit code
+        id: drift
+        run: |
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=120s -detailed-exitcode > drift.txt 2>&1
+          code=$?
+          set -e
+          cat drift.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ $code -eq 1 ]; then echo "::error::Plan failed"; exit 1; fi
+
+      - name: No drift
+        if: steps.drift.outputs.code == '0'
+        run: echo "## ✅ No drift. Azure matches the code." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Drift found - open an issue
+        if: steps.drift.outputs.code == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Drift detection run #${{ github.run_number }} found resources in Azure that **do not match the code**."
+            echo ""
+            echo "Someone (or something) changed production outside the pipeline. Every manual change must be either:"
+            echo "1. **Reverted**: re-run *ICR Implement: Apply to Azure* (Terraform puts it back), or"
+            echo "2. **Adopted**: raise an ICR and add the change to the code properly."
+            echo ""
+            echo "<details><summary>What Terraform would change to fix it</summary>"
+            echo ""
+            echo '```terraform'
+            sed -n '/Terraform will perform/,$p' drift.txt | head -c 55000
+            echo '```'
+            echo "</details>"
+          } > issue.md
+          EXISTING=$(gh issue list --state open --search "Drift detected in production in:title" --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file issue.md
+            echo "## ⚠️ Drift still present. Updated issue #$EXISTING." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh issue create --title "⚠️ Drift detected in production ($(date -u +%Y-%m-%d))" --body-file issue.md
+            echo "## ⚠️ Drift detected. An issue has been opened." >> "$GITHUB_STEP_SUMMARY"
+          fi

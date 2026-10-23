@@ -1,0 +1,87 @@
+name: "Infrastructure Change Request (ICR)"
+description: "Request a change to HealthWatch Naija infrastructure. No ICR, no change."
+title: "ICR-XXXX: <short description>"
+labels: ["icr"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### 🏥 HealthWatch Naija · Infrastructure Change Request
+        The Platform team reviews every ICR before anything changes in production.
+        Incomplete requests are sent back. Please fill in **every** field.
+
+  - type: input
+    id: requester
+    attributes:
+      label: Requesting team & contact
+      placeholder: "App team · Amaka Obi (amaka@example.com)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options: ["prod", "staging", "dev"]
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs to change?
+      description: Be specific. Resources, sizes, regions, access.
+      placeholder: "Add Kano, Enugu and Rivers to the clinic network..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Business justification
+      placeholder: "3 new state health ministries go live on 1 November..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk level
+      options:
+        - "Low: no user impact, easily reversed"
+        - "Medium: limited user impact or touches security"
+        - "High: outage possible or data affected"
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security impact
+      description: New network access? New data? Who can reach it?
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost impact
+      placeholder: "Estimated +$X / month"
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback plan
+      description: If this goes wrong, how do we undo it and how long will it take?
+
+  - type: input
+    id: window
+    attributes:
+      label: Requested change window
+      placeholder: "Sat 24 Oct, 11:00-12:30 WAT"
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Acknowledgement
+      options:
+        - label: "I understand this change will be made through code (Terraform), reviewed, and approved before it reaches production."
+          required: true
